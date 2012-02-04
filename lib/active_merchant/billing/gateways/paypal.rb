@@ -1,5 +1,6 @@
 require File.dirname(__FILE__) + '/paypal/paypal_common_api'
 require File.dirname(__FILE__) + '/paypal_express'
+require File.dirname(__FILE__) + '/paypal/paypal_recurring_payments' # Add this line
 
 module ActiveMerchant #:nodoc:
   module Billing #:nodoc:
