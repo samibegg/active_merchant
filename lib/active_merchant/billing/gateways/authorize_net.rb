@@ -19,7 +19,7 @@ module ActiveMerchant #:nodoc:
     # 
     # Automated Recurring Billing (ARB) is an optional service for submitting and managing recurring, or subscription-based, transactions.
     # 
-    # To use recurring, update_recurring, cancel_recurring and status_recurring ARB must be enabled for your account.
+    # To use recurring, update_recurring, and cancel_recurring ARB must be enabled for your account.
     # 
     # Information about ARB is available on the {Authorize.Net website}[http://www.authorize.net/solutions/merchantsolutions/merchantservices/automatedrecurringbilling/].
     # Information about the ARB API is available at the {Authorize.Net Integration Center}[http://developer.authorize.net/]
@@ -42,7 +42,7 @@ module ActiveMerchant #:nodoc:
       AVS_RESULT_CODE, TRANSACTION_ID, CARD_CODE_RESPONSE_CODE  = 5, 6, 38
 
       self.supported_countries = ['US']
-      self.supported_cardtypes = [:visa, :master, :american_express, :discover, :diners_club, :jcb]
+      self.supported_cardtypes = [:visa, :master, :american_express, :discover]
       self.homepage_url = 'http://www.authorize.net/'
       self.display_name = 'Authorize.Net'
 
@@ -55,8 +55,7 @@ module ActiveMerchant #:nodoc:
       RECURRING_ACTIONS = {
         :create => 'ARBCreateSubscription',
         :update => 'ARBUpdateSubscription',
-        :cancel => 'ARBCancelSubscription',
-        :status => 'ARBGetSubscriptionStatus'
+        :cancel => 'ARBCancelSubscription'
       }
 
       # Creates a new AuthorizeNetGateway
@@ -87,7 +86,11 @@ module ActiveMerchant #:nodoc:
       def authorize(money, creditcard, options = {})
         post = {}
         add_invoice(post, options)
-        add_creditcard(post, creditcard)
+        
+        # added support for checks MODIFIED
+        # add_creditcard(post, creditcard)
+        add_payment_source(post, creditcard,options) 
+        
         add_address(post, options)
         add_customer_data(post, options)
         add_duplicate_window(post)
@@ -150,20 +153,12 @@ module ActiveMerchant #:nodoc:
       # ==== Options
       #
       # * <tt>:card_number</tt> -- The credit card number the refund is being issued to. (REQUIRED)
-      # * <tt>:first_name</tt> -- The first name of the account being refunded.
-      # * <tt>:last_name</tt> -- The last name of the account being refunded.
-      # * <tt>:zip</tt> -- The postal code of the account being refunded.
       def refund(money, identification, options = {})
         requires!(options, :card_number)
 
         post = { :trans_id => identification,
                  :card_num => options[:card_number]
                }
-
-        post[:first_name] = options[:first_name] if options[:first_name]
-        post[:last_name] = options[:last_name] if options[:last_name]
-        post[:zip] = options[:zip] if options[:zip]
-
         add_invoice(post, options)
         add_duplicate_window(post)
 
@@ -243,19 +238,6 @@ module ActiveMerchant #:nodoc:
         recurring_commit(:cancel, request)
       end
 
-      # Get Subscription Status of a recurring payment.
-      #
-      # This transaction gets the status of an existing Automated Recurring Billing (ARB) subscription. Your account must have ARB enabled.
-      #
-      # ==== Parameters
-      #
-      # * <tt>subscription_id</tt> -- A string containing the +subscription_id+ of the recurring payment already in place
-      #   for a given credit card. (REQUIRED)
-      def status_recurring(subscription_id)
-        request = build_recurring_request(:status, :subscription_id => subscription_id)
-        recurring_commit(:status, request)
-      end
-
       private
       
       def commit(action, money, parameters)
@@ -320,7 +302,6 @@ module ActiveMerchant #:nodoc:
         post[:delim_data]     = "TRUE"
         post[:delim_char]     = ","
         post[:encap_char]     = "$"
-        post[:solution_ID]    = application_id if application_id.present? && application_id != "ActiveMerchant"
 
         request = post.merge(parameters).collect { |key, value| "x_#{key}=#{CGI.escape(value.to_s)}" }.join("&")
         request
@@ -339,6 +320,37 @@ module ActiveMerchant #:nodoc:
         post[:last_name]  = creditcard.last_name
       end
 
+      # added support for checks START
+      def add_payment_source(params, source, options={})
+        case determine_funding_source(source)
+          when :credit_card then add_creditcard(params, source)
+          when :check       then add_check(params, source)
+        end
+      end 
+
+      def determine_funding_source(source)
+        case
+          when source.class == ActiveMerchant::Billing::CreditCard then :credit_card
+          when source.class == ActiveMerchant::Billing::Check      then :check
+          else raise ArgumentError, "Unsupported funding source provided"
+        end
+      end 
+
+      def add_check(post, check)
+        #puts "Check called........................................."
+        post[:method] = 'ECHECK'                                  # The payment method,ECHECK,The method of payment for the transaction, in this case ECHECK (electronic check). If left blank, this value will default to CC.
+        post[:bank_aba_code] = check.routing_number               # The valid routing number of the customer’s bank, 9 digits
+        post[:bank_acct_num] = check.account_number               # The customer’s valid bank account number,Up to 20 digits,The customer’s checking, business checking or savings bank account number.
+        post[:bank_acct_type] = check.account_type                # The type of bank account,CHECKING, BUSINESSCHECKING, SAVINGS
+        #post[:bank_name] = "bank_name"                           # The name of the bank that holds the customer’s account, Up to 50 characters
+        post[:bank_acct_name]= check.name                         # The name associated with the bank account,Up to 50 characters
+        post[:echeck_type] = "WEB"                                # The type of electronic check transaction,ARC, BOC, CCD, PPD, TEL, WEB,
+        #post[:x_bank_check_number] = ""                          # The check number on the customer’s paper check,Required only when x_echeck_type=ARC or BOC,The check number is only required when a merchant is converting a customer's paper check into an electronic check,Up to 15 characters
+        post[:checkname] = check.name                             # The name on the customer's Checking Account
+        post[:account_holder_type] = check.account_holder_type    # The customer's type of ACH account
+      end 
+      # added support for checks END
+      
       def add_customer_data(post, options)
         if options.has_key? :email
           post[:email] = options[:email]
@@ -465,13 +477,6 @@ module ActiveMerchant #:nodoc:
 
       # Builds body for ARBCancelSubscriptionRequest
       def build_arb_cancel_subscription_request(xml, options)
-        xml.tag!('subscriptionId', options[:subscription_id])
-
-        xml.target!
-      end
-
-      # Builds body for ARBGetSubscriptionStatusRequest
-      def build_arb_status_subscription_request(xml, options)
         xml.tag!('subscriptionId', options[:subscription_id])
 
         xml.target!
